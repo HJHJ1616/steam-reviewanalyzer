@@ -117,4 +117,63 @@ def analyze_gemini(api_key, reviews, lang_option):
     [결과 리포트 양식]
     1. 🔍 **경쟁사 대비 비교 분석**: 타 게임 언급 사례 및 우위/열위 포인트.
     2. 💡 **구체적 개선 제안 TOP 3**: 유저들이 가장 원하는 기능/시스템 변경사항.
-    3. 📉 **치명적 이탈 요인 (Pain Points)**:
+    3. 📉 **치명적 이탈 요인 (Pain Points)**: 유저가 게임을 접게 만드는 결정적 원인.
+    4. 🧩 **시스템적 제언**: 개발팀에게 전달할 한 줄 요약.
+
+    [데이터]
+    {full_text}
+    """
+
+    # 🇺🇸 English Prompt (For Global Reporting)
+    prompt_en = f"""
+    You are a Senior UX Researcher and Product Strategist at a global game company.
+    Analyze the Steam review data below to derive 'key indicators for product improvement'.
+    
+    [Analysis Guidelines]
+    1. Cross-Language Analysis: Analyze the context regardless of the original review language.
+    2. Competitor Comparison: Identify and cite specific comparisons with other games (e.g., "Unlike Game X...").
+    3. Improvement Suggestions (IF Analysis): Extract constructive feedback like "It would be better if..." or "I wish this system was..."
+
+    [Report Format]
+    **OUTPUT MUST BE IN ENGLISH.**
+    
+    1. 🔍 **Competitor Analysis**: Mentions of other games and comparative pros/cons.
+    2. 💡 **Top 3 Improvement Requests**: Specific system/feature changes requested by users.
+    3. 📉 **Critical Churn Factors (Pain Points)**: Decisive reasons why users quit the game.
+    4. 🧩 **Systemic Recommendations**: A one-line summary for the development team.
+
+    [Data]
+    {full_text}
+    """
+    
+    # 선택된 언어에 따라 프롬프트 결정
+    final_prompt = prompt_en if "English" in lang_option else prompt_kr
+    
+    return model.generate_content(final_prompt).text
+
+# ==========================================
+# 5. 메인 실행 화면
+# ==========================================
+st.divider()
+
+app_id = st.text_input("Steam App ID (ex: 413150)", placeholder="Type App ID here")
+
+if st.button("🚀 Analyze / 분석 시작", type="primary", use_container_width=True):
+    if not api_key:
+        st.error("⚠️ Please enter API Key in the sidebar.")
+    elif not app_id:
+        st.warning("⚠️ Please enter App ID.")
+    else:
+        with st.spinner("Collecting data & Analyzing..."):
+            data_list = collect_reviews(app_id, target_count)
+            if data_list:
+                # 함수 호출 시 언어 옵션도 같이 전달
+                report = analyze_gemini(api_key, data_list, report_lang)
+                
+                st.markdown("---")
+                st.subheader(f"📊 Analysis Report ({report_lang})")
+                st.write(report)
+                
+                st.download_button("💾 Download Report", report, f"Report_{app_id}_{report_lang}.txt")
+            else:
+                st.error("No reviews found. Check App ID.")
