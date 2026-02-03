@@ -4,32 +4,45 @@ import google.generativeai as genai
 import time
 
 # 1. 페이지 설정
-st.set_page_config(page_title="Steam 리뷰 분석기", page_icon="🎮", layout="wide")
-st.title("🎮 Steam 리뷰 심층 분석기 (Web Ver.)")
-st.markdown("App ID만 입력하면 **플레이 타임별 유저 반응**을 분석해드립니다.")
+st.set_page_config(page_title="Steam Review Analyzer (Global)", page_icon="🎮", layout="wide")
+st.title("🎮 Steam 리뷰 심층 분석기 (Global Ver.)")
+st.markdown("""
+App ID만 입력하면 **유저 피드백과 개선점**을 심층 분석합니다.
+Select language in the sidebar to change the report language.
+""")
 
-# 2. 사이드바 설정 (자동/수동 로그인 통합)
+# ==========================================
+# 2. 사이드바 설정 (언어 선택 기능 추가!)
+# ==========================================
 with st.sidebar:
-    st.header("⚙️ 설정")
-    api_key = None
+    st.header("⚙️ Settings")
     
-    # secrets 파일이 있으면 자동으로 가져오고, 없으면 그냥 넘어감 (오류 방지)
+    # 🌍 언어 선택 버튼 (여기가 핵심!)
+    report_lang = st.radio(
+        "Report Language / 분석 언어",
+        ["🇰🇷 한국어", "🇺🇸 English"],
+        index=0
+    )
+    
+    st.divider()
+
+    # API 키 처리
+    api_key = None
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ API 키 자동 연동됨")
+            st.success(f"✅ API Key Loaded ({report_lang})")
     except:
         pass
 
-    # 연동 안 됐으면 직접 입력받기
     if not api_key:
         api_key = st.text_input("Gemini API Key", type="password")
         if not api_key:
-            st.warning("👈 먼저 API 키를 입력해주세요!")
+            st.warning("Please enter API Key first.")
     
-    target_count = st.slider("분석 리뷰 수", 50, 500, 200)
+    target_count = st.slider("Review Count / 분석 개수", 50, 500, 200)
 
-# 3. 데이터 수집 함수
+# 3. 데이터 수집 함수 (기존과 동일)
 def collect_reviews(app_id, target_count):
     reviews = []
     cursor = '*'
@@ -53,12 +66,11 @@ def collect_reviews(app_id, target_count):
             if len(content) < 30: continue 
             
             playtime = int(review['author']['playtime_forever']/60)
-            vote = '추천' if review['voted_up'] else '비추천'
+            vote = 'Recommended' if review['voted_up'] else 'Not Recommended'
             reviews.append(f"[{playtime}h] {vote}: {content}")
             
-            # 진행률 표시
             current_len = len(reviews)
-            status_text.text(f"🔍 {current_len}개 확보 중...")
+            status_text.text(f"🔍 Collecting... {current_len} reviews")
             progress_bar.progress(min(current_len / target_count, 1.0))
             
             if current_len >= target_count: break
@@ -70,54 +82,39 @@ def collect_reviews(app_id, target_count):
     progress_bar.empty()
     return reviews
 
-# 4. AI 분석 함수 (모델 자동 선택)
-def analyze_gemini(api_key, reviews):
+# 4. AI 분석 함수 (언어에 따라 프롬프트 자동 변경)
+def analyze_gemini(api_key, reviews, lang_option):
     genai.configure(api_key=api_key)
     
-    # 사용 가능한 모델 찾기
+    # 모델 자동 선택
     available_models = []
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
     except:
-        return "❌ API 키가 올바르지 않거나 권한이 없습니다."
+        return "❌ Error: API Key is invalid."
 
-    # 모델 우선순위 선택
     target_model = ""
     if 'models/gemini-1.5-flash' in available_models: target_model = 'gemini-1.5-flash'
     elif 'models/gemini-pro' in available_models: target_model = 'gemini-pro'
     elif available_models: target_model = available_models[0].replace('models/', '')
-    else: return "❌ 사용 가능한 모델이 없습니다."
+    else: return "❌ No available models found."
 
     model = genai.GenerativeModel(target_model)
-    prompt = f"다음 스팀 리뷰를 플레이 타임별(초반/중반/고인물)로 상세 분석해줘:\n\n" + "\n".join(reviews)
-    return model.generate_content(prompt).text
+    full_text = "\n".join(reviews)
+    
+    # 🇰🇷 한국어 프롬프트
+    prompt_kr = f"""
+    너는 글로벌 게임사의 시니어 UX 리서처이자 제품 전략가야. 
+    아래 Steam 리뷰 데이터를 분석하여 '제품 개선을 위한 핵심 지표'를 도출해줘.
 
-# ==========================================
-# 5. 메인 실행 화면 (여기가 중요합니다!!)
-# ==========================================
-st.divider() # 구분선
+    [분석 가이드라인]
+    1. 언어 통합: 리뷰 원문 언어와 상관없이 내용을 통합하여 분석할 것.
+    2. 경쟁작 비교: 다른 게임과 비교하는 내용을 반드시 찾아서 인용할 것.
+    3. 개선 제안 (IF 분석): "~하면 좋을 텐데" 같은 유저의 아쉬움과 제안을 시스템적으로 정리할 것.
 
-# 👇 여기가 입력칸입니다!
-app_id = st.text_input("Steam App ID 입력 (예: 413150)", placeholder="숫자만 입력하세요")
-
-# 👇 여기가 버튼입니다!
-if st.button("🚀 분석 시작", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("⚠️ 왼쪽 사이드바에 API 키를 먼저 입력해주세요!")
-    elif not app_id:
-        st.warning("⚠️ App ID를 입력해주세요.")
-    else:
-        with st.spinner("데이터 수집 및 AI 분석 중..."):
-            data_list = collect_reviews(app_id, target_count)
-            if data_list:
-                report = analyze_gemini(api_key, data_list)
-                st.markdown("---")
-                st.subheader("📊 분석 리포트")
-                st.write(report)
-                
-                # 다운로드 버튼
-                st.download_button("💾 결과 다운로드", report, f"Report_{app_id}.txt")
-            else:
-                st.error("리뷰를 찾을 수 없습니다. App ID를 확인해주세요.")
+    [결과 리포트 양식]
+    1. 🔍 **경쟁사 대비 비교 분석**: 타 게임 언급 사례 및 우위/열위 포인트.
+    2. 💡 **구체적 개선 제안 TOP 3**: 유저들이 가장 원하는 기능/시스템 변경사항.
+    3. 📉 **치명적 이탈 요인 (Pain Points)**:
