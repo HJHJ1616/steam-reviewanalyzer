@@ -1,57 +1,50 @@
 import streamlit as st
 import requests
 import google.generativeai as genai
-import time
+import pandas as pd
+import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="Steam Review Analyzer (Global)", page_icon="🎮", layout="wide")
-st.title("🎮 Steam 리뷰 심층 분석기 (Global Ver.)")
+st.set_page_config(page_title="Steam Review Analyzer (Pro)", page_icon="🎮", layout="wide")
+st.title("🎮 Steam 리뷰 심층 분석기 (Pro Ver.)")
 st.markdown("""
-App ID만 입력하면 **유저 피드백과 개선점**을 심층 분석합니다.
-Select language in the sidebar to change the report language.
+App ID를 입력하면 **AI 분석 리포트**와 **플레이 타임 통계 차트**를 제공합니다.
 """)
 
 # ==========================================
-# 2. 사이드바 설정 (언어 선택 기능 추가!)
+# 2. 사이드바 설정
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # 🌍 언어 선택 버튼 (여기가 핵심!)
-    report_lang = st.radio(
-        "Report Language / 분석 언어",
-        ["🇰🇷 한국어", "🇺🇸 English"],
-        index=0
-    )
-    
+    report_lang = st.radio("언어 / Language", ["🇰🇷 한국어", "🇺🇸 English"], index=0)
     st.divider()
 
-    # API 키 처리
     api_key = None
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success(f"✅ API Key Loaded ({report_lang})")
+            st.success(f"✅ API Key Loaded")
     except:
         pass
 
     if not api_key:
         api_key = st.text_input("Gemini API Key", type="password")
-        if not api_key:
-            st.warning("Please enter API Key first.")
     
-    target_count = st.slider("Review Count / 분석 개수", 50, 500, 200)
+    target_count = st.slider("분석 데이터 수", 100, 1000, 300)
 
-# 3. 데이터 수집 함수 (기존과 동일)
-def collect_reviews(app_id, target_count):
-    reviews = []
+# 3. 데이터 수집 함수 (차트용 데이터도 같이 수집!)
+def collect_data(app_id, target_count):
+    reviews_text = [] # AI에게 보낼 텍스트
+    playtimes = []    # 차트 그릴 숫자 데이터
+    
     cursor = '*'
     params = {'json': 1, 'filter': 'updated', 'language': 'all', 'num_per_page': 100}
     
     status_text = st.empty()
     progress_bar = st.progress(0)
     
-    while len(reviews) < target_count:
+    while len(reviews_text) < target_count:
         params['cursor'] = cursor
         try:
             response = requests.get(f"https://store.steampowered.com/appreviews/{app_id}", params=params, timeout=10)
@@ -65,12 +58,22 @@ def collect_reviews(app_id, target_count):
             content = review['review'].replace("\n", " ").strip()
             if len(content) < 30: continue 
             
-            playtime = int(review['author']['playtime_forever']/60)
+            # 시간 계산 (분 -> 시간)
+            hours = int(review['author']['playtime_forever'] / 60)
             vote = 'Recommended' if review['voted_up'] else 'Not Recommended'
-            reviews.append(f"[{playtime}h] {vote}: {content}")
             
-            current_len = len(reviews)
-            status_text.text(f"🔍 Collecting... {current_len} reviews")
+            # 1. AI용 텍스트 저장
+            reviews_text.append(f"[{hours}h] {vote}: {content}")
+            
+            # 2. 차트용 데이터 저장 (딕셔너리 형태)
+            playtimes.append({
+                "Hours": hours,
+                "Vote": vote,
+                "Review Length": len(content)
+            })
+            
+            current_len = len(reviews_text)
+            status_text.text(f"🔍 Data Collecting... {current_len}")
             progress_bar.progress(min(current_len / target_count, 1.0))
             
             if current_len >= target_count: break
@@ -80,13 +83,38 @@ def collect_reviews(app_id, target_count):
     
     status_text.empty()
     progress_bar.empty()
-    return reviews
+    
+    # 데이터프레임으로 변환 (차트 그리기 쉽게)
+    df = pd.DataFrame(playtimes)
+    return reviews_text, df
 
-# 4. AI 분석 함수 (언어에 따라 프롬프트 자동 변경)
+# 4. 차트 그리는 함수 (NEW!)
+def draw_charts(df):
+    # 구간(Bin) 설정: 0~10h, 10~50h, 50~100h, 100h+
+    bins = [0, 10, 50, 100, 100000]
+    labels = ['0~10h (Newbie)', '10~50h (Mid)', '50~100h (Core)', '100h+ (Hardcore)']
+    
+    df['User Type'] = pd.cut(df['Hours'], bins=bins, labels=labels, right=False)
+    
+    # 차트 1: 유저 분포 (파이 차트)
+    user_counts = df['User Type'].value_counts().reset_index()
+    user_counts.columns = ['User Type', 'Count']
+    
+    fig1 = px.pie(user_counts, values='Count', names='User Type', 
+                  title='🎮 Playtime Distribution (리뷰어 플레이 성향)',
+                  hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+    
+    # 차트 2: 구간별 추천/비추천 비율 (바 차트)
+    fig2 = px.histogram(df, x="User Type", color="Vote", 
+                        title="📊 Vote Ratio by Playtime (구간별 평가)",
+                        barmode='group', color_discrete_map={'Recommended':'#66C2A5', 'Not Recommended':'#FC8D62'})
+
+    return fig1, fig2
+
+# 5. AI 분석 함수 (이전과 동일)
 def analyze_gemini(api_key, reviews, lang_option):
     genai.configure(api_key=api_key)
     
-    # 모델 자동 선택
     available_models = []
     try:
         for m in genai.list_models():
@@ -104,76 +132,59 @@ def analyze_gemini(api_key, reviews, lang_option):
     model = genai.GenerativeModel(target_model)
     full_text = "\n".join(reviews)
     
-    # 🇰🇷 한국어 프롬프트
-    prompt_kr = f"""
-    너는 글로벌 게임사의 시니어 UX 리서처이자 제품 전략가야. 
-    아래 Steam 리뷰 데이터를 분석하여 '제품 개선을 위한 핵심 지표'를 도출해줘.
-
-    [분석 가이드라인]
-    1. 언어 통합: 리뷰 원문 언어와 상관없이 내용을 통합하여 분석할 것.
-    2. 경쟁작 비교: 다른 게임과 비교하는 내용을 반드시 찾아서 인용할 것.
-    3. 개선 제안 (IF 분석): "~하면 좋을 텐데" 같은 유저의 아쉬움과 제안을 시스템적으로 정리할 것.
-
-    [결과 리포트 양식]
-    1. 🔍 **경쟁사 대비 비교 분석**: 타 게임 언급 사례 및 우위/열위 포인트.
-    2. 💡 **구체적 개선 제안 TOP 3**: 유저들이 가장 원하는 기능/시스템 변경사항.
-    3. 📉 **치명적 이탈 요인 (Pain Points)**: 유저가 게임을 접게 만드는 결정적 원인.
-    4. 🧩 **시스템적 제언**: 개발팀에게 전달할 한 줄 요약.
-
+    prompt_kr = """
+    너는 게임 데이터 분석가야. 아래 데이터를 바탕으로 인사이트를 도출해줘.
+    [가이드라인]
+    1. 경쟁작 비교 언급 추출.
+    2. 유저들의 구체적인 개선 제안(IF 분석) 정리.
+    3. 플레이 타임별(초반/중반/고인물) 여론의 온도차 분석.
+    
     [데이터]
-    {full_text}
-    """
+    """ + full_text
 
-    # 🇺🇸 English Prompt (For Global Reporting)
-    prompt_en = f"""
-    You are a Senior UX Researcher and Product Strategist at a global game company.
-    Analyze the Steam review data below to derive 'key indicators for product improvement'.
+    prompt_en = """
+    Analyze the Steam review data as a Game Data Analyst.
+    [Guidelines]
+    1. Extract comparisons with competitor games.
+    2. Summarize specific improvement suggestions (IF analysis).
+    3. Analyze the sentiment difference between new players vs. hardcore players.
     
-    [Analysis Guidelines]
-    1. Cross-Language Analysis: Analyze the context regardless of the original review language.
-    2. Competitor Comparison: Identify and cite specific comparisons with other games (e.g., "Unlike Game X...").
-    3. Improvement Suggestions (IF Analysis): Extract constructive feedback like "It would be better if..." or "I wish this system was..."
-
-    [Report Format]
-    **OUTPUT MUST BE IN ENGLISH.**
-    
-    1. 🔍 **Competitor Analysis**: Mentions of other games and comparative pros/cons.
-    2. 💡 **Top 3 Improvement Requests**: Specific system/feature changes requested by users.
-    3. 📉 **Critical Churn Factors (Pain Points)**: Decisive reasons why users quit the game.
-    4. 🧩 **Systemic Recommendations**: A one-line summary for the development team.
-
     [Data]
-    {full_text}
-    """
+    """ + full_text
     
-    # 선택된 언어에 따라 프롬프트 결정
     final_prompt = prompt_en if "English" in lang_option else prompt_kr
-    
     return model.generate_content(final_prompt).text
 
 # ==========================================
-# 5. 메인 실행 화면
+# 6. 메인 실행 화면
 # ==========================================
 st.divider()
-
 app_id = st.text_input("Steam App ID (ex: 413150)", placeholder="Type App ID here")
 
 if st.button("🚀 Analyze / 분석 시작", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("⚠️ Please enter API Key in the sidebar.")
-    elif not app_id:
-        st.warning("⚠️ Please enter App ID.")
+    if not api_key or not app_id:
+        st.error("API Key와 App ID를 확인해주세요.")
     else:
-        with st.spinner("Collecting data & Analyzing..."):
-            data_list = collect_reviews(app_id, target_count)
-            if data_list:
-                # 함수 호출 시 언어 옵션도 같이 전달
-                report = analyze_gemini(api_key, data_list, report_lang)
+        with st.spinner("Collecting & Analyzing..."):
+            # 데이터 수집 (텍스트 + 데이터프레임)
+            reviews_text, df = collect_data(app_id, target_count)
+            
+            if reviews_text:
+                # 1. 차트 그리기 (위쪽에 배치)
+                st.subheader("📈 Data Dashboard")
+                fig1, fig2 = draw_charts(df)
+                col1, col2 = st.columns(2)
+                with col1: st.plotly_chart(fig1, use_container_width=True)
+                with col2: st.plotly_chart(fig2, use_container_width=True)
                 
+                # 2. AI 분석
+                report = analyze_gemini(api_key, reviews_text, report_lang)
+                
+                # 3. 결과 출력
                 st.markdown("---")
-                st.subheader(f"📊 Analysis Report ({report_lang})")
+                st.subheader(f"📝 AI Analysis Report ({report_lang})")
                 st.write(report)
                 
-                st.download_button("💾 Download Report", report, f"Report_{app_id}_{report_lang}.txt")
+                st.download_button("💾 Report Download", report, f"Report_{app_id}.txt")
             else:
-                st.error("No reviews found. Check App ID.")
+                st.error("No reviews found.")
